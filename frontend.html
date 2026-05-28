@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title>OSM + 3D Buildings</title>
+
+  <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet"/>
+  <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+  <style>
+    body { margin: 0; }
+    #map { width: 100vw; height: 100vh; }
+    #search-container {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      width: min(420px, calc(100vw - 24px));
+      background: rgba(255, 255, 255, 0.96);
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+      overflow: hidden;
+    }
+    #search-input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 0;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    #search-input:focus {
+      box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+    }
+    #search-results {
+      max-height: 280px;
+      overflow-y: auto;
+      border-top: 1px solid #dee2e6;
+    }
+    .search-result {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid #e9ecef;
+      background: #fff;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+      transition: background-color 0.15s ease-in-out;
+    }
+    .search-result:hover {
+      background: #f8f9fa;
+      color: #0d6efd;
+    }
+    .maplibregl-popup-content {
+      padding: 12px;
+      border-radius: 6px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .maplibregl-popup-content strong {
+      color: #212529;
+    }
+  </style>
+</head>
+<body>
+
+<div id="search-container">
+  <input id="search-input" type="text" class="form-control border-0" placeholder="Пошук адреси..." autocomplete="off" />
+  <div id="search-results"></div>
+</div>
+<div id="map"></div>
+
+<script>
+const emptyFeatureCollection = {
+  type: 'FeatureCollection',
+  features: []
+};
+const BUILDINGS_GEOJSON_URL = 'http://localhost:8082/fetch-data';
+const SEARCH_API_URL = 'http://localhost:8082/search?q=';
+
+const searchContainerElement = document.getElementById('search-container');
+const searchInputElement = document.getElementById('search-input');
+const searchResultsElement = document.getElementById('search-results');
+
+let searchMarker = null;
+let latestSearchRequestId = 0;
+
+const map = new maplibregl.Map({
+  container: 'map',
+  center: [24.021185586516125, 49.854764308899654],
+  zoom: 16,
+  pitch: 60,
+  bearing: -20,
+  antialias: true,
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors'
+      },
+      buildings: {
+        type: 'geojson',
+        data: emptyFeatureCollection
+      }
+    },
+    layers: [
+      {
+        id: 'osm-layer',
+        type: 'raster',
+        source: 'osm'
+      },
+      {
+        id: '3d-buildings',
+        type: 'fill-extrusion',
+        source: 'buildings',
+        paint: {
+          'fill-extrusion-color': '#ff6600',
+          'fill-extrusion-height': ['coalesce', ['to-number', ['get', 'height']], 20],
+          'fill-extrusion-opacity': 0.9
+        }
+      }
+    ]
+  }
+});
+
+map.addControl(new maplibregl.NavigationControl());
+
+function normalizePopupValue(value) {
+  if (value === undefined || value === null || value === '') {
+    return 'N/A';
+  }
+  return String(value);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isCoordinate(value) {
+  return Array.isArray(value)
+    && value.length >= 2
+    && typeof value[0] === 'number'
+    && typeof value[1] === 'number'
+    && Number.isFinite(value[0])
+    && Number.isFinite(value[1]);
+}
+
+function extractCoordinateFromGeometry(geometry) {
+  if (!geometry || typeof geometry !== 'object') {
+    return null;
+  }
+
+  if (geometry.type === 'GeometryCollection' && Array.isArray(geometry.geometries)) {
+    for (const nestedGeometry of geometry.geometries) {
+      const nestedCoordinate = extractCoordinateFromGeometry(nestedGeometry);
+      if (nestedCoordinate) {
+        return nestedCoordinate;
+      }
+    }
+    return null;
+  }
+
+  function walkCoordinates(coordinates) {
+    if (!Array.isArray(coordinates)) {
+      return null;
+    }
+    if (isCoordinate(coordinates)) {
+      return [coordinates[0], coordinates[1]];
+    }
+    for (const nestedCoordinates of coordinates) {
+      const nestedCoordinate = walkCoordinates(nestedCoordinates);
+      if (nestedCoordinate) {
+        return nestedCoordinate;
+      }
+    }
+    return null;
+  }
+
+  return walkCoordinates(geometry.coordinates);
+}
+
+function extractCoordinateFromGeoJson(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  if (item.type === 'Feature') {
+    return extractCoordinateFromGeometry(item.geometry);
+  }
+
+  if (item.type === 'FeatureCollection' && Array.isArray(item.features)) {
+    for (const feature of item.features) {
+      const coordinate = extractCoordinateFromGeoJson(feature);
+      if (coordinate) {
+        return coordinate;
+      }
+    }
+    return null;
+  }
+
+  return extractCoordinateFromGeometry(item);
+}
+
+function normalizeSearchResults(payload) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload.filter((item) => item && item.type === 'Feature' && typeof item === 'object');
+}
+
+function clearSearchResults() {
+  searchResultsElement.innerHTML = '';
+}
+
+function selectSearchResult(result) {
+  const coordinate = extractCoordinateFromGeoJson(result);
+  if (!coordinate) {
+    console.warn('Selected search result has no valid coordinate.');
+    return;
+  }
+
+  const properties = result && result.properties ? result.properties : {};
+  const address = normalizePopupValue(properties.address);
+  searchInputElement.value = address === 'N/A' ? '' : address;
+
+  if (!searchMarker) {
+    searchMarker = new maplibregl.Marker();
+  }
+
+  searchMarker
+    .setLngLat(coordinate)
+    .setPopup(new maplibregl.Popup().setHTML('<strong>Адреса:</strong> ' + escapeHtml(address)))
+    .addTo(map)
+    .togglePopup();
+
+  map.flyTo({
+    center: coordinate,
+    zoom: Math.max(map.getZoom(), 18),
+    speed: 1.2,
+    essential: true
+  });
+
+  clearSearchResults();
+}
+
+function renderSearchResults(results) {
+  clearSearchResults();
+
+  for (const result of results) {
+    const properties = result && result.properties ? result.properties : {};
+    const address = normalizePopupValue(properties.address);
+    const itemButton = document.createElement('button');
+    itemButton.type = 'button';
+    itemButton.className = 'search-result btn btn-light w-100 text-start rounded-0 border-0 border-bottom';
+    itemButton.textContent = address;
+    itemButton.addEventListener('click', () => selectSearchResult(result));
+    searchResultsElement.appendChild(itemButton);
+  }
+}
+
+searchInputElement.addEventListener('input', async () => {
+  const query = searchInputElement.value.trim();
+  if (!query) {
+    latestSearchRequestId += 1;
+    clearSearchResults();
+    return;
+  }
+
+  const requestId = latestSearchRequestId + 1;
+  latestSearchRequestId = requestId;
+
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const response = await fetch(SEARCH_API_URL + encodedQuery, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Charset': 'utf-8'
+      }
+    });
+    if (!response.ok) {
+      throw new Error('Failed to search by query: ' + query);
+    }
+
+    const payload = await response.json();
+    if (requestId !== latestSearchRequestId) {
+      return;
+    }
+
+    renderSearchResults(normalizeSearchResults(payload));
+  } catch (error) {
+    if (requestId !== latestSearchRequestId) {
+      return;
+    }
+    clearSearchResults();
+    console.error(error);
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (!searchContainerElement.contains(event.target)) {
+    clearSearchResults();
+  }
+});
+
+map.on('click', '3d-buildings', (event) => {
+  const feature = event.features && event.features[0];
+  if (!feature) {
+    return;
+  }
+
+  const properties = feature.properties || {};
+  const popupHtml = `
+    <div class="p-2">
+      <div class="mb-2">
+        <strong class="text-dark">Висота:</strong>
+        <span class="badge bg-primary">${escapeHtml(normalizePopupValue(properties.height))}</span>
+      </div>
+      <div>
+        <strong class="text-dark">Адреса:</strong>
+        <br>
+        <small class="text-muted">${escapeHtml(normalizePopupValue(properties.address))}</small>
+      </div>
+    </div>
+  `;
+
+  new maplibregl.Popup()
+    .setLngLat(event.lngLat)
+    .setHTML(popupHtml)
+    .addTo(map);
+});
+
+map.on('mouseenter', '3d-buildings', () => {
+  map.getCanvas().style.cursor = 'pointer';
+});
+
+map.on('mouseleave', '3d-buildings', () => {
+  map.getCanvas().style.cursor = '';
+});
+
+map.on('load', async () => {
+  try {
+    const response = await fetch(BUILDINGS_GEOJSON_URL, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Charset': 'utf-8'
+      }
+    });
+    if (!response.ok) {
+      throw new Error('Failed to load GeoJSON from ' + BUILDINGS_GEOJSON_URL);
+    }
+
+    const geojson = await response.json();
+    const source = map.getSource('buildings');
+    if (source) {
+      source.setData(geojson);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+});
+</script>
+</body>
+</html>
+
