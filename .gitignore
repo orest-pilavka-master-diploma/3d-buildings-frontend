@@ -1,0 +1,20 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Local environment (copy .env.example to .env)
+.env
+.env.*
+!.env.example
+
+# AI-assistant working notes (plans, reviews)
+.agents/
+
+# Editors, OS and tool leftovers
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
+*.tsbuildinfo

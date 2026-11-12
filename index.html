@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Тіні будівель — 3D аналіз сонця</title>
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <!-- Fades in to dim the whole scene (basemap + buildings) after sunset. -->
+    <div id="night-overlay" class="night-overlay" aria-hidden="true"></div>
+
+
+
+    <!-- Add/edit panel pinned to the top-right corner (not anchored to the map). -->
+    <div id="add-card" class="floating-card" role="dialog" aria-label="Нова будівля" hidden>
+      <div id="add-panel" class="add-panel floating-card__body">
+        <div class="field">
+          <label class="field__label" for="add-height">Висота (м)</label>
+          <input id="add-height" class="control control__input add-panel__input" type="number" min="0.1" step="0.5" inputmode="decimal" />
+        </div>
+        <p id="add-warning" class="add-panel__warning" hidden></p>
+        <div class="add-panel__actions">
+          <button id="add-cancel" class="ghost-button" type="button">Скасувати</button>
+          <button id="add-confirm" class="control control--button add-panel__confirm" type="button">Додати</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="edit-card" class="floating-card" role="dialog" aria-label="Редагування об’єкта" hidden>
+      <div id="edit-panel" class="add-panel edit-panel floating-card__body">
+        <div class="field__row edit-panel__header">
+          <span class="field__label">Редагування об’єкта</span>
+          <button id="edit-close" class="ghost-button" type="button">Готово</button>
+        </div>
+        <p class="hint edit-panel__hint">
+          Перетягуйте точки, щоб змінити форму, центральну точку — щоб перемістити, зелену точку або саму будівлю — щоб обертати навколо центру.
+        </p>
+        <div class="field">
+          <label class="field__label" for="edit-height">Висота (м)</label>
+          <input id="edit-height" class="control control__input add-panel__input" type="number" min="0.1" step="0.5" inputmode="decimal" />
+        </div>
+        <div class="field">
+          <label class="field__label" for="edit-rotate">Поворот (°)</label>
+          <input id="edit-rotate" class="control control__input add-panel__input" type="number" step="1" inputmode="numeric" />
+        </div>
+        <p id="edit-warning" class="add-panel__warning" hidden></p>
+        <button id="edit-save" class="ghost-button" type="button">Зберегти об’єкт як GeoJSON</button>
+        <div class="add-panel__actions">
+          <button id="edit-delete" class="ghost-button edit-panel__delete" type="button">Видалити</button>
+        </div>
+      </div>
+    </div>
+
+    <aside id="panel" class="panel" aria-label="Параметри сонця">
+      <header class="panel__header">
+        <span class="panel__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.4v2.2M12 19.4v2.2M2.4 12h2.2M19.4 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6" />
+          </svg>
+        </span>
+        <div class="panel__titles">
+          <h1 class="panel__title">Тіні будівель</h1>
+          <p class="panel__subtitle">Львів · 3D аналіз інсоляції</p>
+        </div>
+      </header>
+
+      <div id="search-container" class="field">
+        <label class="field__label" for="search-input">Адреса</label>
+        <div class="control">
+          <span class="control__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="11" cy="11" r="6.4" />
+              <path d="M15.8 15.8 21 21" />
+            </svg>
+          </span>
+          <input
+            id="search-input"
+            class="control__input"
+            type="text"
+            placeholder="Пошук адреси..."
+            autocomplete="off"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="search-results"
+          />
+        </div>
+        <div id="search-results" class="search-results" role="listbox" aria-label="Результати пошуку"></div>
+      </div>
+
+      <section class="field">
+        <div class="field__row">
+          <label class="field__label" for="date-trigger">Дата</label>
+          <button id="today-button" class="ghost-button" type="button">Сьогодні</button>
+        </div>
+        <div class="date-field">
+          <button
+            id="date-trigger"
+            class="control control--button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+          >
+            <span class="control__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <rect x="3.2" y="4.8" width="17.6" height="16" rx="3" />
+                <path d="M3.2 9.6h17.6M8.4 3.2v3.2M15.6 3.2v3.2" />
+              </svg>
+            </span>
+            <span id="date-label" class="control__value">—</span>
+            <span class="control__chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="m6 9.5 6 6 6-6" />
+              </svg>
+            </span>
+          </button>
+
+          <div id="calendar" class="calendar" role="dialog" aria-label="Вибір дати" hidden>
+            <div class="calendar__header">
+              <button id="calendar-prev" class="icon-button" type="button" aria-label="Попередній місяць">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="m14.5 6-6 6 6 6" />
+                </svg>
+              </button>
+              <span id="calendar-title" class="calendar__title" aria-live="polite"></span>
+              <button id="calendar-next" class="icon-button" type="button" aria-label="Наступний місяць">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="m9.5 6 6 6-6 6" />
+                </svg>
+              </button>
+            </div>
+            <div class="calendar__weekdays" aria-hidden="true">
+              <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Нд</span>
+            </div>
+            <div id="calendar-grid" class="calendar__grid" role="grid" aria-labelledby="calendar-title"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="field">
+        <div class="field__row field__row--time">
+          <label class="field__label" for="time-input">Час</label>
+          <div class="playback">
+            <button id="play-toggle" class="icon-button playback__play" type="button" aria-label="Відтворити" aria-pressed="false">
+              <svg class="playback__icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path class="playback__icon-path" d="M8 5.5v13l11-6.5z" />
+              </svg>
+            </button>
+            <label class="playback__step">
+              <span class="playback__step-label">Крок/с</span>
+              <select id="play-step" class="playback__select" aria-label="Крок часу за секунду">
+                <option value="1">1 хв</option>
+                <option value="5">5 хв</option>
+                <option value="15" selected>15 хв</option>
+                <option value="60">1 год</option>
+              </select>
+            </label>
+          </div>
+          <!--
+            A text field rather than <input type="time">: the native control renders
+            AM/PM whenever the browser locale is a 12-hour one, and that cannot be
+            overridden reliably. Parsing and formatting here are always 24-hour.
+          -->
+          <input
+            id="time-input"
+            class="time-input"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="5"
+            placeholder="--:--"
+            pattern="([01][0-9]|2[0-3]):[0-5][0-9]"
+            aria-label="Час у 24-годинному форматі, ручне введення"
+          />
+        </div>
+        <div class="slider">
+          <div id="time-track" class="slider__track" aria-hidden="true"></div>
+          <input
+            id="time-slider"
+            class="slider__input"
+            type="range"
+            min="0"
+            max="1439"
+            step="1"
+            value="720"
+            aria-label="Час доби"
+          />
+        </div>
+        <div class="slider__scale" aria-hidden="true">
+          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        </div>
+        <p id="sun-times" class="sun-times"></p>
+      </section>
+
+      <label class="switch">
+        <input id="live-toggle" class="switch__input" type="checkbox" />
+        <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+        <span class="switch__text">
+          <span class="switch__title">Реальний час</span>
+          <span id="live-hint" class="switch__hint">Оновлення щохвилини</span>
+        </span>
+      </label>
+
+      <details class="extras">
+        <summary class="extras__summary">
+          <span class="extras__title">Додаткові функції</span>
+          <span class="extras__chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="m6 9.5 6 6 6-6" />
+            </svg>
+          </span>
+        </summary>
+        <div class="extras__body">
+          <label class="switch">
+            <input id="facade-toggle" class="switch__input" type="checkbox" checked />
+            <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+            <span class="switch__text">
+              <span class="switch__title">Фасади (вікна)</span>
+              <span class="switch__hint">Вікна та підсвічені вечірні вікна</span>
+            </span>
+          </label>
+        </div>
+      </details>
+
+      <section class="field editing">
+        <div class="field__row">
+          <label class="field__label">Власні об’єкти</label>
+        </div>
+        <button id="add-building-trigger" class="control control--button editing__trigger" type="button">
+          <span class="control__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 10.5 12 4l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />
+            </svg>
+          </span>
+          <span class="control__value">Додати будівлю</span>
+        </button>
+
+        <div id="draw-mode-chooser" class="editing__modes" role="group" aria-label="Спосіб малювання" hidden>
+          <button id="draw-mode-rectangle" class="control control--button editing__mode" type="button">
+            <span class="control__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <rect x="4" y="6" width="16" height="12" rx="1.5" />
+              </svg>
+            </span>
+            <span class="control__value">Прямокутник</span>
+          </button>
+          <button id="draw-mode-polygon" class="control control--button editing__mode" type="button">
+            <span class="control__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <path d="M12 3.5 20 9.5 17 20H7L4 9.5z" />
+              </svg>
+            </span>
+            <span class="control__value">Власна фігура</span>
+          </button>
+        </div>
+
+        <p id="draw-hint" class="hint editing__hint" hidden>
+          Клік — додати точку, подвійний клік — завершити, Esc — скасувати, Backspace — видалити точку
+        </p>
+        <button id="save-all-trigger" class="control control--button editing__trigger editing__save" type="button" disabled>
+          <span class="control__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 3.5h11l3 3V20a.5.5 0 0 1-.5.5h-13A.5.5 0 0 1 5 20z" />
+              <path d="M8 3.5v5h6v-5M8 20.5v-6h8v6" />
+            </svg>
+          </span>
+          <span class="control__value">Зберегти всі як GeoJSON</span>
+        </button>
+
+        <button id="upload-trigger" class="control control--button editing__trigger editing__save" type="button">
+          <span class="control__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 16V4M7.5 8.5 12 4l4.5 4.5" />
+              <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+            </svg>
+          </span>
+          <span class="control__value">Завантажити GeoJSON</span>
+        </button>
+        <input id="upload-input" class="editing__file" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden />
+        <p id="upload-message" class="hint editing__upload-message" hidden></p>
+      </section>
+
+      <div id="info" class="info" aria-live="polite"></div>
+      <p id="hint" class="hint">Будівлі завантажуються з бекенду...</p>
+    </aside>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
